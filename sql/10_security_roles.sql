@@ -1,27 +1,30 @@
 -- ============================================================================
--- 10_security_roles.sql: Data Control Language (DCL) & Least-Privilege Security
--- Implements RBAC with app_role, admin_role, and readonly_role.
+-- 10_security_roles.sql: Authorization, Privileges & Roles (DCL)
+-- Directly maps to Database System Concepts (Chapter 4, Slides 4.20-4.23):
+--   1. Forms of Authorization: SELECT, INSERT, UPDATE, DELETE, EXECUTE (Slide 4.20)
+--   2. Roles: CREATE ROLE (Slide 4.21)
+--   3. Grant Statement: GRANT <privileges> ON <relation> TO <role> (Slide 4.21, 4.22)
+--   4. Revoke Statement: REVOKE <privileges> FROM <role> (Slide 4.23)
 -- ============================================================================
 
 USE campuspool;
 
--- ----------------------------------------------------------------------------
--- 1. CREATE ROLES
--- ----------------------------------------------------------------------------
--- WHAT: Creates 3 discrete security roles for the application, DBA, and auditors.
--- WHY: Enables least-privilege access control without assigning raw table rights directly to accounts.
+-- ============================================================================
+-- 1. CREATE ROLES (Silberschatz Slide 4.21)
+-- Defines least-privilege security roles.
+-- ============================================================================
 CREATE ROLE IF NOT EXISTS app_role;
 CREATE ROLE IF NOT EXISTS admin_role;
 CREATE ROLE IF NOT EXISTS readonly_role;
 
--- ----------------------------------------------------------------------------
--- 2. ASSIGN PRIVILEGES TO ROLES
--- ----------------------------------------------------------------------------
--- WHAT: Grants the app_role permission to EXECUTE procedures and SELECT from views and essential tables.
--- WHY: Prevents SQL injection or compromised server code from executing arbitrary DDL, DROP, or DELETE statements.
+-- ============================================================================
+-- 2. GRANT PRIVILEGES TO ROLES (Silberschatz Slides 4.21, 4.22)
+-- ============================================================================
+
+-- A. Application Role: Execute procedures and read/write essential tables
 GRANT EXECUTE ON campuspool.* TO app_role;
 
--- Read-only views and reference catalogs for frontend consumption
+-- SELECT privileges on views and catalogs
 GRANT SELECT ON campuspool.vw_available_rides TO app_role;
 GRANT SELECT ON campuspool.vw_masked_users TO app_role;
 GRANT SELECT ON campuspool.vw_driver_leaderboard TO app_role;
@@ -30,41 +33,46 @@ GRANT SELECT ON campuspool.COMMUNITY TO app_role;
 GRANT SELECT ON campuspool.COMMUNITY_MEMBER TO app_role;
 GRANT SELECT ON campuspool.LOCATION TO app_role;
 GRANT SELECT ON campuspool.VEHICLE TO app_role;
+
+-- DML Privileges for standard operational workflows
 GRANT SELECT, INSERT ON campuspool.USER TO app_role;
 GRANT SELECT, INSERT ON campuspool.STUDENT TO app_role;
 GRANT SELECT, INSERT ON campuspool.DRIVER TO app_role;
 GRANT SELECT, INSERT ON campuspool.USER_PHONE TO app_role;
 GRANT SELECT, INSERT ON campuspool.EMERGENCY_CONTACT TO app_role;
-GRANT SELECT ON campuspool.RIDE_POST TO app_role;
-GRANT SELECT ON campuspool.RIDE_STOP TO app_role;
-GRANT SELECT ON campuspool.RIDE_REQUEST TO app_role;
-GRANT SELECT ON campuspool.TRIP TO app_role;
-GRANT SELECT ON campuspool.PAYMENT TO app_role;
-GRANT SELECT ON campuspool.RATING TO app_role;
-GRANT SELECT, UPDATE ON campuspool.NOTIFICATION TO app_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON campuspool.RIDE_POST TO app_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON campuspool.RIDE_REQUEST TO app_role;
+GRANT SELECT, INSERT, UPDATE ON campuspool.TRIP TO app_role;
+GRANT SELECT, INSERT, UPDATE ON campuspool.PAYMENT TO app_role;
+GRANT SELECT, INSERT ON campuspool.RATING TO app_role;
+GRANT SELECT, INSERT, UPDATE ON campuspool.NOTIFICATION TO app_role;
 
--- Admin role has full control over the database
+-- B. Admin Role: Full database privileges (Slide 4.22: "all privileges")
 GRANT ALL PRIVILEGES ON campuspool.* TO admin_role;
 
--- Read-only role for campus audit examiners and report generators
+-- C. Read-Only Role: Read access only (Slide 4.20: "Read - allows reading, but not modification")
 GRANT SELECT ON campuspool.* TO readonly_role;
 
--- ----------------------------------------------------------------------------
--- 3. CREATE LEAST-PRIVILEGE SERVICE USERS & ASSIGN ROLES
--- ----------------------------------------------------------------------------
--- WHAT: Creates dedicated accounts for the Node.js backend and reporting tools.
--- WHY: Eliminates connecting as root in production or during university viva presentations.
+-- ============================================================================
+-- 3. REVOKE PRIVILEGES DEMONSTRATION (Silberschatz Slide 4.23)
+-- Demonstrates granting and then revoking privileges to enforce least privilege.
+-- ============================================================================
+-- Step A: Grant DELETE on RIDE_POST
+GRANT DELETE ON campuspool.RIDE_POST TO app_role;
 
--- Application Service Account (Used by Node.js backend)
+-- Step B: Revoke DELETE from app_role (proves privilege withdrawal)
+REVOKE DELETE ON campuspool.RIDE_POST FROM app_role;
+
+-- ============================================================================
+-- 4. APPLICATION USER & ROLE ASSIGNMENT
+-- ============================================================================
 CREATE USER IF NOT EXISTS 'campus_app'@'localhost' IDENTIFIED BY 'AppPassword123!';
 CREATE USER IF NOT EXISTS 'campus_app'@'%' IDENTIFIED BY 'AppPassword123!';
-GRANT app_role TO 'campus_app'@'localhost', 'campus_app'@'%';
-SET DEFAULT ROLE app_role TO 'campus_app'@'localhost', 'campus_app'@'%';
 
--- Campus Auditor / Examiner Account
-CREATE USER IF NOT EXISTS 'campus_auditor'@'localhost' IDENTIFIED BY 'AuditPass123!';
-GRANT readonly_role TO 'campus_auditor'@'localhost';
-SET DEFAULT ROLE readonly_role TO 'campus_auditor'@'localhost';
+-- Assign the app_role to the service account
+GRANT app_role TO 'campus_app'@'localhost';
+GRANT app_role TO 'campus_app'@'%';
 
--- Refresh MySQL privilege tables
-FLUSH PRIVILEGES;
+-- Activate default role for connection
+SET DEFAULT ROLE app_role TO 'campus_app'@'localhost';
+SET DEFAULT ROLE app_role TO 'campus_app'@'%';

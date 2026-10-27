@@ -1,12 +1,14 @@
 -- ============================================================================
--- 01_schema_tables.sql: Base Tables and Entity Definitions
--- Derived from rideshare.pdf ER diagram with normalization to 3NF/BCNF
+-- 01_schema_tables.sql: Base Relational Tables & Entity Definitions
+-- Directly derived from the CampusPool ER Diagram (docs/rideshare.pdf)
+-- Demonstrates Normalization: 1NF, 2NF, 3NF, and BCNF (Database Concepts Ch. 3 & 4)
 -- ============================================================================
 
 USE campuspool;
 
--- WHAT: Drops existing tables in reverse dependency order.
--- WHY: Allows clean re-running of schema scripts during development and evaluation without foreign key errors.
+-- ----------------------------------------------------------------------------
+-- Cleanup: Drop tables in reverse dependency order (Child tables first)
+-- ----------------------------------------------------------------------------
 SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS AUDIT_LOG;
 DROP TABLE IF EXISTS NOTIFICATION;
@@ -28,8 +30,10 @@ DROP TABLE IF EXISTS COLLEGE;
 DROP TABLE IF EXISTS USER;
 SET FOREIGN_KEY_CHECKS = 1;
 
--- WHAT: Stores participating university campuses with geographic coordinates.
--- WHY: Rides and communities are centered around colleges, enabling geocoding and campus verification.
+-- ============================================================================
+-- 1. COLLEGE Relation (ER Entity: COLLEGE)
+-- DBMS Concept: 3NF / BCNF Entity. Candidate Key: college_id
+-- ============================================================================
 CREATE TABLE COLLEGE (
     college_id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(150) NOT NULL,
@@ -41,8 +45,10 @@ CREATE TABLE COLLEGE (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
--- WHAT: Defines trust-based ride-sharing groups (General, specific College, or Custom).
--- WHY: Lets riders restrict pools to people from their own college or verified circles for safety.
+-- ============================================================================
+-- 2. COMMUNITY Relation (ER Entity: COMMUNITY)
+-- DBMS Concept: Relational decomposition of campus communities and circles.
+-- ============================================================================
 CREATE TABLE COMMUNITY (
     community_id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -50,12 +56,18 @@ CREATE TABLE COMMUNITY (
     college_id INT NULL,
     description TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_community_college FOREIGN KEY (college_id) 
+    CONSTRAINT fk_comm_college FOREIGN KEY (college_id) 
         REFERENCES COLLEGE(college_id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Master user entity with personal details, status, and verification state.
--- WHY: Central identity table representing all participants (both drivers and riders) in 3NF.
+-- ============================================================================
+-- 3. USER Relation (ER Entity: USER)
+-- DBMS Concepts:
+--   a) 1NF: Composite attribute 'name' split into atomic 'first_name', 'last_name'.
+--   b) 1NF: Multivalued attribute 'phone_numbers' decomposed to USER_PHONE.
+--   c) Derived Attribute: 'age' computed from 'date_of_birth'.
+--   d) Candidate Keys: user_id (PK), email (UNIQUE).
+-- ============================================================================
 CREATE TABLE USER (
     user_id INT AUTO_INCREMENT PRIMARY KEY,
     first_name VARCHAR(60) NOT NULL,
@@ -64,16 +76,17 @@ CREATE TABLE USER (
     password_hash VARCHAR(255) NOT NULL,
     gender ENUM('MALE', 'FEMALE', 'OTHER', 'PREFER_NOT_TO_SAY') DEFAULT 'PREFER_NOT_TO_SAY',
     date_of_birth DATE NOT NULL,
-    -- Derived attribute: age calculated from date of birth
-    age INT GENERATED ALWAYS AS (TIMESTAMPDIFF(YEAR, date_of_birth, CURDATE())) VIRTUAL,
+    age INT NULL,                                   -- Derived attribute (maintained by trigger)
     profile_photo VARCHAR(255) DEFAULT '/avatars/default.png',
     status ENUM('ACTIVE', 'SUSPENDED', 'INACTIVE') DEFAULT 'ACTIVE',
     is_verified BOOLEAN DEFAULT FALSE,
     joined_on TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
--- WHAT: Associates users with communities they belong to.
--- WHY: Resolves the M:N relationship between USER and COMMUNITY with timestamp tracking.
+-- ============================================================================
+-- 4. COMMUNITY_MEMBER Relation (ER Relationship: USER belongs_to COMMUNITY)
+-- DBMS Concept: M:N relationship resolved into intersection table with composite PK.
+-- ============================================================================
 CREATE TABLE COMMUNITY_MEMBER (
     user_id INT NOT NULL,
     community_id INT NOT NULL,
@@ -81,47 +94,60 @@ CREATE TABLE COMMUNITY_MEMBER (
     PRIMARY KEY (user_id, community_id),
     CONSTRAINT fk_cm_user FOREIGN KEY (user_id) 
         REFERENCES USER(user_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT fk_cm_community FOREIGN KEY (community_id) 
+    CONSTRAINT fk_cm_comm FOREIGN KEY (community_id) 
         REFERENCES COMMUNITY(community_id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Stores phone numbers for users.
--- WHY: Resolves the multivalued 'phone_numbers' attribute from the ER diagram to maintain 1NF.
+-- ============================================================================
+-- 5. USER_PHONE Relation (ER Multivalued Attribute: USER.phone_numbers)
+-- DBMS Concept: 1NF Multivalued Attribute Decomposition.
+-- Eliminates non-atomic repeated phone strings into a 1NF child relation.
+-- ============================================================================
 CREATE TABLE USER_PHONE (
     user_id INT NOT NULL,
     phone_no VARCHAR(20) NOT NULL,
     is_primary BOOLEAN DEFAULT FALSE,
     PRIMARY KEY (user_id, phone_no),
-    CONSTRAINT fk_phone_user FOREIGN KEY (user_id) 
+    CONSTRAINT fk_uphone_user FOREIGN KEY (user_id) 
         REFERENCES USER(user_id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Subtype entity for users enrolled in an academic institution (ISA specialization).
--- WHY: Keeps college-specific academic attributes separate from general users (3NF normalization).
+-- ============================================================================
+-- 6. STUDENT Relation (ER ISA Subtype: STUDENT ISA USER)
+-- DBMS Concept: Specialization / Subtyping hierarchy.
+-- user_id serves as both Primary Key and Foreign Key to USER.
+-- ============================================================================
 CREATE TABLE STUDENT (
     user_id INT PRIMARY KEY,
     roll_no VARCHAR(50) NOT NULL,
     program VARCHAR(100) NOT NULL,
     year INT NOT NULL,
     college_id INT NOT NULL,
-    CONSTRAINT fk_student_user FOREIGN KEY (user_id) 
+    CONSTRAINT fk_stud_user FOREIGN KEY (user_id) 
         REFERENCES USER(user_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT fk_student_college FOREIGN KEY (college_id) 
+    CONSTRAINT fk_stud_college FOREIGN KEY (college_id) 
         REFERENCES COLLEGE(college_id) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Subtype entity for users registered to drive vehicles (ISA specialization).
--- WHY: Isolates driver license data and maintains dynamic driver ratings.
+-- ============================================================================
+-- 7. DRIVER Relation (ER ISA Subtype: DRIVER ISA USER)
+-- DBMS Concept: Specialization / Subtyping hierarchy with Candidate Key license_no.
+-- ============================================================================
 CREATE TABLE DRIVER (
     user_id INT PRIMARY KEY,
     license_no VARCHAR(50) NOT NULL UNIQUE,
     average_rating DECIMAL(3, 2) DEFAULT 5.00,
-    CONSTRAINT fk_driver_user FOREIGN KEY (user_id) 
+    CONSTRAINT fk_driv_user FOREIGN KEY (user_id) 
         REFERENCES USER(user_id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Weak entity storing emergency contacts for users (identified by user_id + contact_no).
--- WHY: Ensures campus safety compliance; contacts have no independent identity outside their user.
+-- ============================================================================
+-- 8. EMERGENCY_CONTACT Relation (ER Weak Entity: EMERGENCY_CONTACT)
+-- DBMS Concepts:
+--   a) Weak Entity: Depends existentially on USER (identifying relationship).
+--   b) Discriminator / Partial Key: contact_no.
+--   c) Composite Primary Key: (user_id, contact_no) -> 2NF & 3NF satisfied.
+-- ============================================================================
 CREATE TABLE EMERGENCY_CONTACT (
     user_id INT NOT NULL,
     contact_no INT NOT NULL,
@@ -129,12 +155,14 @@ CREATE TABLE EMERGENCY_CONTACT (
     phone VARCHAR(20) NOT NULL,
     relationship VARCHAR(50) NOT NULL,
     PRIMARY KEY (user_id, contact_no),
-    CONSTRAINT fk_contact_user FOREIGN KEY (user_id) 
+    CONSTRAINT fk_econtact_user FOREIGN KEY (user_id) 
         REFERENCES USER(user_id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Stores vehicle details owned and operated by verified drivers.
--- WHY: Required for assigning seats, verifying vehicle capacity, and checking license plate numbers.
+-- ============================================================================
+-- 9. VEHICLE Relation (ER Entity: VEHICLE, DRIVER owns VEHICLE)
+-- DBMS Concept: 3NF / BCNF Entity. Foreign key driver_id references DRIVER.
+-- ============================================================================
 CREATE TABLE VEHICLE (
     vehicle_id INT AUTO_INCREMENT PRIMARY KEY,
     driver_id INT NOT NULL,
@@ -145,12 +173,14 @@ CREATE TABLE VEHICLE (
     color VARCHAR(30) NOT NULL,
     capacity INT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_vehicle_driver FOREIGN KEY (driver_id) 
+    CONSTRAINT fk_veh_driver FOREIGN KEY (driver_id) 
         REFERENCES DRIVER(user_id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Geographic points of interest, campus gates, transit hubs, and student hostels.
--- WHY: Eliminates redundant coordinate and address storage across rides and stops (3NF).
+-- ============================================================================
+-- 10. LOCATION Relation (ER Entity: LOCATION)
+-- DBMS Concept: Normalized master catalog for pickup/dropoff points (prevents redundancy).
+-- ============================================================================
 CREATE TABLE LOCATION (
     location_id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(120) NOT NULL,
@@ -161,8 +191,10 @@ CREATE TABLE LOCATION (
     geohash VARCHAR(16) NULL
 ) ENGINE=InnoDB;
 
--- WHAT: Ride offers posted by drivers with departure time, route endpoints, and seat quotas.
--- WHY: Core entity allowing drivers to announce carpool availability and set cost share.
+-- ============================================================================
+-- 11. RIDE_POST Relation (ER Entity: RIDE_POST)
+-- DBMS Concept: Core carpool offer entity with multiple Foreign Keys (3NF).
+-- ============================================================================
 CREATE TABLE RIDE_POST (
     ride_id INT AUTO_INCREMENT PRIMARY KEY,
     driver_id INT NOT NULL,
@@ -183,14 +215,19 @@ CREATE TABLE RIDE_POST (
         REFERENCES VEHICLE(vehicle_id) ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT fk_ride_pickup FOREIGN KEY (pickup_location_id) 
         REFERENCES LOCATION(location_id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT fk_ride_destination FOREIGN KEY (destination_location_id) 
+    CONSTRAINT fk_ride_dest FOREIGN KEY (destination_location_id) 
         REFERENCES LOCATION(location_id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    CONSTRAINT fk_ride_community FOREIGN KEY (community_id) 
+    CONSTRAINT fk_ride_comm FOREIGN KEY (community_id) 
         REFERENCES COMMUNITY(community_id) ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Ordered intermediate waypoints for a ride post (weak entity of RIDE_POST).
--- WHY: Supports multi-stop pooling routes with estimated arrival times along the commute.
+-- ============================================================================
+-- 12. RIDE_STOP Relation (ER Weak Entity: RIDE_STOP)
+-- DBMS Concepts:
+--   a) Weak Entity: Dependent on RIDE_POST.
+--   b) Discriminator / Partial Key: sequence_no.
+--   c) Composite Primary Key: (ride_id, sequence_no) -> Full FD satisfies 2NF/3NF.
+-- ============================================================================
 CREATE TABLE RIDE_STOP (
     ride_id INT NOT NULL,
     sequence_no INT NOT NULL,
@@ -200,12 +237,14 @@ CREATE TABLE RIDE_STOP (
     PRIMARY KEY (ride_id, sequence_no),
     CONSTRAINT fk_stop_ride FOREIGN KEY (ride_id) 
         REFERENCES RIDE_POST(ride_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT fk_stop_location FOREIGN KEY (location_id) 
+    CONSTRAINT fk_stop_loc FOREIGN KEY (location_id) 
         REFERENCES LOCATION(location_id) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Booking requests submitted by riders to join a specific ride post.
--- WHY: Implements request-and-accept workflow with seat hold validation and fare confirmation.
+-- ============================================================================
+-- 13. RIDE_REQUEST Relation (ER Entity: RIDE_REQUEST)
+-- DBMS Concept: Passenger booking request entity (M:N between USER and RIDE_POST).
+-- ============================================================================
 CREATE TABLE RIDE_REQUEST (
     request_id INT AUTO_INCREMENT PRIMARY KEY,
     ride_id INT NOT NULL,
@@ -221,8 +260,12 @@ CREATE TABLE RIDE_REQUEST (
         REFERENCES USER(user_id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Execution record of an accepted ride (1:1 relationship with completed/started ride post).
--- WHY: Records actual trip execution, real distance, time duration, and final calculated fares.
+-- ============================================================================
+-- 14. TRIP Relation (ER Entity: TRIP)
+-- DBMS Concepts:
+--   a) 1:1 Relationship with completed RIDE_POST (ride_id UNIQUE).
+--   b) Virtual Generated Column: duration_minutes derived from start_time and end_time.
+-- ============================================================================
 CREATE TABLE TRIP (
     trip_id INT AUTO_INCREMENT PRIMARY KEY,
     ride_id INT NOT NULL UNIQUE,
@@ -231,7 +274,6 @@ CREATE TABLE TRIP (
     start_time DATETIME NULL,
     end_time DATETIME NULL,
     distance_km DECIMAL(6, 2) NOT NULL DEFAULT 0.00,
-    -- Duration in minutes calculated when end_time is populated
     duration_minutes INT GENERATED ALWAYS AS (
         CASE 
             WHEN start_time IS NOT NULL AND end_time IS NOT NULL 
@@ -250,8 +292,10 @@ CREATE TABLE TRIP (
         REFERENCES VEHICLE(vehicle_id) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Financial settlement record for a passenger participating in a trip.
--- WHY: Manages payment integrity, methods, transaction references, and audit tracking.
+-- ============================================================================
+-- 15. PAYMENT Relation (ER Entity: PAYMENT)
+-- DBMS Concept: Settlement relation with transaction_reference candidate key.
+-- ============================================================================
 CREATE TABLE PAYMENT (
     payment_id INT AUTO_INCREMENT PRIMARY KEY,
     trip_id INT NOT NULL,
@@ -267,8 +311,10 @@ CREATE TABLE PAYMENT (
         REFERENCES USER(user_id) ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Mutual peer review and feedback submitted after a trip completes.
--- WHY: Cultivates safety and accountability in campus pooling by calculating verified driver ratings.
+-- ============================================================================
+-- 16. RATING Relation (ER Entity: RATING)
+-- DBMS Concept: Peer evaluation entity linking rater, ratee, and trip.
+-- ============================================================================
 CREATE TABLE RATING (
     rating_id INT AUTO_INCREMENT PRIMARY KEY,
     trip_id INT NOT NULL,
@@ -277,16 +323,18 @@ CREATE TABLE RATING (
     score TINYINT NOT NULL,
     comment TEXT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_rating_trip FOREIGN KEY (trip_id) 
+    CONSTRAINT fk_rate_trip FOREIGN KEY (trip_id) 
         REFERENCES TRIP(trip_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT fk_rating_rater FOREIGN KEY (rater_user_id) 
+    CONSTRAINT fk_rate_rater FOREIGN KEY (rater_user_id) 
         REFERENCES USER(user_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT fk_rating_ratee FOREIGN KEY (ratee_user_id) 
+    CONSTRAINT fk_rate_ratee FOREIGN KEY (ratee_user_id) 
         REFERENCES USER(user_id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: System alerts dispatched to users on ride milestones, requests, and updates.
--- WHY: Keeps riders and drivers instantly informed without polling or manual message tracking.
+-- ============================================================================
+-- 17. NOTIFICATION Relation (ER Entity: NOTIFICATION)
+-- DBMS Concept: Reactive notification entity triggered by database events.
+-- ============================================================================
 CREATE TABLE NOTIFICATION (
     notification_id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
@@ -298,8 +346,10 @@ CREATE TABLE NOTIFICATION (
         REFERENCES USER(user_id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB;
 
--- WHAT: Immutable audit trail logging critical row modifications and security events.
--- WHY: Satisfies enterprise compliance, monitors trigger actions, and supports forensic rollbacks.
+-- ============================================================================
+-- 18. AUDIT_LOG Relation
+-- DBMS Concept: System audit trail recording row modifications.
+-- ============================================================================
 CREATE TABLE AUDIT_LOG (
     log_id INT AUTO_INCREMENT PRIMARY KEY,
     table_name VARCHAR(50) NOT NULL,
